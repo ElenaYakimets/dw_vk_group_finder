@@ -3,19 +3,24 @@ import time
 import requests
 import json
 
+API_VK = 'https://api.vk.com/method/'
+CONFIG_PATH = 'config/configuration.json'
+ERROR_TOO_MANY_REQUESTS = 6
+
 
 # сделать запрос к API
-def get_api_data(api, method, params):
-    response = dict()
-    api_link = '{}{}'.format(api, method)
+def get_api_data(method, params):
+    api_link = '{}{}'.format(API_VK, method)
     while True:
-        response = requests.get(api_link, params=params).json()
+        response = requests.get(api_link, params=params)
+        response.raise_for_status()
+        response = response.json()
         print('*')
         if 'response' in response:
             return response['response']['items']
         else:
             error = response['error']['error_code']
-            if error == 6:
+            if error == ERROR_TOO_MANY_REQUESTS:
                 time.sleep(3)
                 continue
             else:
@@ -23,7 +28,7 @@ def get_api_data(api, method, params):
 
 
 # получить группы
-def get_groups(api, user_id, common_params):
+def get_groups(user_id, common_params):
     params = {
         'user_id': user_id,
         'count': 1000,
@@ -31,12 +36,12 @@ def get_groups(api, user_id, common_params):
         'fields': 'members_count'
         }
     params.update(common_params)
-    groups = get_api_data(api, 'groups.get', params)
+    groups = get_api_data('groups.get', params)
     return groups
 
 
 # получить друзей
-def get_user_friends(api, common_params):
+def get_user_friends(common_params):
     while True:
         user_id = input('Введите id пользователя для анализа: ')
         params = {
@@ -45,7 +50,7 @@ def get_user_friends(api, common_params):
             }
         params.update(common_params)
 
-        friends = get_api_data(api, 'friends.get', params)
+        friends = get_api_data('friends.get', params)
         if 'error' in friends:
             print('Пользователь не найден. Повторите ввод')
             continue
@@ -53,7 +58,7 @@ def get_user_friends(api, common_params):
             break
     # выбираем только неудаленных друзей
     valid_friends = [fr for fr in friends if 'deactivated' not in fr]
-    return (user_id, valid_friends)
+    return user_id, valid_friends
 
 
 def read_json_file(filename):
@@ -68,20 +73,17 @@ def write_json_data(filename, text):
 
 
 def main():
-    API_VK = 'https://api.vk.com/method/'
-    CONFIG_PATH = 'config/configuration.json'
 
     # читаем настройки
-    settings = read_json_file(CONFIG_PATH)[0]
+    settings = read_json_file(CONFIG_PATH)
 
     params = {
         'access_token': settings['access_token'],
         'v': settings['version']
         }
 
-    user_friends = get_user_friends(API_VK, params)
-    user_id, friends = user_friends
-    groups = get_groups(API_VK, user_id, params)
+    user_id, friends = get_user_friends(params)
+    groups = get_groups(user_id, params)
 
     # составляем список из словарей, каждый из которых - данные о друге
     my_groups = [(gr['id'], gr['name']) for gr in groups]
@@ -92,7 +94,7 @@ def main():
     for i, friend in enumerate(friends):
         print('{} из {} пользователей'.format(i, len_friends))
         print('Обработка групп пользователя {} {}'.format(friend['first_name'], friend['last_name']))
-        friend_groups_json = get_groups(API_VK, friend['id'], params)
+        friend_groups_json = get_groups(friend['id'], params)
         friend_groups_list = [(gr['id'], gr['name']) for gr in friend_groups_json]
         friend_groups_overall = friend_groups_overall.union(friend_groups_list)
 
@@ -101,7 +103,10 @@ def main():
     # преобразуем итог в список с id
     result_groups_ids = [group_id for group_id, name in result_set]
     # для финального результата собираем список словарей с полями 'id', 'name', 'members_count'
-    result_groups_json = [{k: v for k, v in gr.items() if (k in ['id', 'name', 'members_count'])} for gr in groups if gr['id'] in result_groups_ids]
+    result_groups_json = []
+    for gr in groups:
+        if gr['id'] in result_groups_ids:
+            result_groups_json.append({k: v for k, v in gr.items() if (k in ('id', 'name', 'members_count'))})
     # пишем json в файл
     write_json_data('groups.json', str(result_groups_json))
     print('Обработано успешно, результат сохранен в файле groups.json')
